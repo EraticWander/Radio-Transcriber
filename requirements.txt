@@ -1,0 +1,4 @@
+tensorflow[and-cuda]
+numpy
+discord.py==1.7.3
+deepspeech-gpu
