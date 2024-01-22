@@ -1,160 +1,242 @@
 import subprocess
 import threading
 import os
-from deepspeech import Model
-import wave
 import numpy as np
+
 
 from datetime import datetime
 
-from discord import Webhook, RequestsWebhookAdapter, Embed, Color
+from discord import Webhook, RequestsWebhookAdapter, Embed, Color, File
 
 import signal
 import time
 import glob
+import whisper
+import torch
 
-shutdown_signal = False
-num_files_threshold = 3
+import gc
 
-def signal_handler(signal, frame):
-    global shutdown_signal
-    print("Received signal to gracefully shut down.")
-    shutdown_signal = True
-                
-def webhook(msg):
-    webhook = Webhook.from_url('https://discord.com/api/webhooks/1069460895333371986/jVfdkcxuomx75XxBTcvKPqeRtLCG6ViZH2H0-iHNnGu1YRFl4Qr8eJ_lVR-iu6gm5UVn',
-    adapter=RequestsWebhookAdapter())
-    embed = Embed(title=msg['title'], description=msg['msg'], color=Color.blue())
-    webhook.send(embed=embed)
 
-def transcribe_audio_file(audio_file_path):
-    model_path = "./deepspeech-0.9.3-models.pbmm"
-    scorer_path = "./deepspeech-0.9.3-models.scorer"
+class RadioListener:
+    def __init__(self, temp_folder = "temp_audio_clips", listener_duration = (20 * 60), stream_url = ""):
+        self.temp_folder = temp_folder
+        signal.signal(signal.SIGINT, self.signal_handler)
+        os.makedirs(self.temp_folder, exist_ok=True)
+        os.makedirs("transcribe", exist_ok=True)
+        self.num_files_threshold = 3
+        self.listener_duration = listener_duration
+        self.shutdown_signal = False
+        self.stream_url = stream_url
+        self.download_thread = threading.Thread(target=self.download_clip, args=(), daemon=True)
+        self.monitor_thread = threading.Thread(target=self.monitor_and_transcribe, args=(), daemon=True)
+
+    def signal_handler(self, signal, frame):
+        print("Received signal to gracefully shut down.")
+        self.shutdown_signal = True
+        del self.model.encoder
+        del self.model.decoder
+        with torch.no_grad():
+            torch.cuda.empty_cache()
+        gc.collect()
+        
+
+    def webhook(self, msg, file_path=None):
+        webhook_url = 'https://discord.com/api/webhooks/1197650847664980029/VlpzbKii8dBYb5slvOHP3Q1wJmvgGGu30YDiRZMchXW-sYHOtdTczchO02CNFCxsP1mZ'
+        webhook = Webhook.from_url(webhook_url, adapter=RequestsWebhookAdapter())
     
-    model = Model(model_path)
-    model.enableExternalScorer(scorer_path)
+        embed = Embed(title=msg['title'], description=msg['msg'], url=msg['url'], color=Color.blue())
     
-    print(f"Transcribing {audio_file_path}...")
-
-    # Check if the file exists
-    if not os.path.exists(audio_file_path):
-        print(f"Error: File {audio_file_path} does not exist.")
-        return
-
-    try:
-        # Read audio file
-        fin = wave.open(audio_file_path, 'rb')
-        audio = np.frombuffer(fin.readframes(fin.getnframes()), np.int16)
-        fin.close()
-
-        # Perform inference
-        infered_text = model.stt(audio)
-
-        # Append inferred text to the output text file
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        output_text_file = "transcribe/Transcribed Audio.txt"
-        with open(output_text_file, 'a') as text_file:
-            text_file.write(f"{timestamp}: {infered_text}\n")
-
-        # Delete the audio file
-        os.remove(audio_file_path)
-
-        print(f"Transcription complete. Audio file deleted.")
-    except Exception as e:
-        print(f"Error: {e}")
-
-# Function to monitor and transcribe audio clips
-def monitor_and_transcribe(temp_folder):
-    while not shutdown_signal:
-        # Get the list of files in the temp folder
-        files = glob.glob(os.path.join(temp_folder, "*.wav"))
-
-        # Check if the number of files exceeds the threshold
-        if len(files) >= num_files_threshold:
-            # Sort files by modification time (oldest first)
-            files.sort(key=os.path.getmtime)
-
-            # Transcribe the oldest file
-            oldest_file = files[0]
-            transcribe_audio_file(oldest_file)
-
-            # Sleep to avoid immediate re-triggering
-            time.sleep(5)  # You can adjust this value as needed
-            
-def remove_all_files_in_folder(folder_path):
-    # Get the list of files in the folder
-    files = os.listdir(folder_path)
-
-    # Iterate over the list and remove each file
-    for file in files:
-        file_path = os.path.join(folder_path, file)
-        try:
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-                print(f"File removed: {file_path}")
-        except Exception as e:
-            print(f"Error removing file {file_path}: {e}")
-
-def download_clip(url, temp_folder):
-    temp_file = os.path.join(temp_folder, "output_audio_%Y%m%d%H%M%S.wav")
-
-    ffmpeg_command = [
-        'ffmpeg',
-        '-i', url,
-        '-f', 'wav',
-        '-ar', '16000',
-        '-ac', '1',
-        '-af', 'volume=10,highpass=f=1000,lowpass=f=8000',
-        '-acodec', 'pcm_s16le',  # Set audio codec to pcm_s16le
-        '-f', 'segment',  # Specify the segment format
-        '-segment_time', '00:01:00',
-        '-strftime', '1',
-        temp_file
-    ]
-    try:
-        process = subprocess.Popen(ffmpeg_command)
-        # Wait for the process to finish or for a shutdown signal
-        while process.poll() is None and not shutdown_signal:
-            pass
-        print("Clip download process terminated.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error: {e}")
-    finally:
-        if process:
-            process.terminate()
-            process.wait()
-        if shutdown_signal:
-            # Perform any cleanup or finalization steps here
-            print("Graceful shutdown completed.")
-            remove_all_files_in_folder(temp_folder)
+        if file_path:
+            with open(file_path, mode="rb") as f:
+                audio_file = File(f)
+            webhook.send(embed=embed, file=audio_file)
         else:
-            print("Process completed without a shutdown signal.")
+            webhook.send(embed=embed)
 
-def listener_start():
-    stream_url = "http://19473.live.streamtheworld.com:80/CHSUFM_ADP_SC"
-    temp_folder = "temp_audio_clips"
-    #clip_duration = 600
-    signal.signal(signal.SIGINT, signal_handler)
-    os.makedirs(temp_folder, exist_ok=True)
-    os.makedirs("transcribe", exist_ok=True)
-    start_msg = {
+    def return_keyword(self, audio_trans):
+        from openai import OpenAI
+        print ("sending to chatgpt to find keyword")
+        client = OpenAI(
+            api_key= "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"
+        )
+        chat = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Find the keyword in this string: '{audio_trans}'",
+                }
+            ],
+            model="gpt-3.5-turbo",
+        )
+        
+        return chat.choices[0].message.content
+
+        
+    def find_keyword(self, transcribed_string, file):
+        import re
+        # Use regular expression to find the keyword
+        matches = re.search(r'\b' + re.escape("keyword") + r'\b', transcribed_string, flags=re.IGNORECASE)
+
+        # Check if the keyword is found
+        if matches:
+            print ("Match found")
+            try:
+                keyword = self.return_keyword(transcribed_string)
+            except Exception as e:
+                print (e)
+                keyword = transcribed_string
+            print (keyword)
+            found_msg = {
+                "title":"RadioListener Found Keyword",
+                "msg":keyword,
+                "url":"https://www.iheartradio.ca/virginradio/kelowna/contests/virgin-radio-s-100-000-destroy-your-debt-1.21030390"
+                }
+            self.webhook(found_msg, file_path=file)
+
+    def transcribe_audio_file(self, audio_file_path):
+        print(f"Transcribing {audio_file_path}...")
+        # Check if the file exists
+        if not os.path.exists(audio_file_path):
+            print(f"Error: File {audio_file_path} does not exist.")
+            return
+
+        try:
+            self.model = whisper.load_model("base")
+
+            # load audio and pad/trim it to fit 30 seconds
+            audio = whisper.load_audio(audio_file_path)
+            audio = whisper.pad_or_trim(audio)
+
+            # make log-Mel spectrogram and move to the same device as the model
+            mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
+
+            # decode the audio
+            options = whisper.DecodingOptions(language='en',
+                                            fp16=True,
+                                            without_timestamps=False)
+            result = whisper.decode(self.model, mel, options)
+            
+            search_thread = threading.Thread(target=self.find_keyword, args=(result.text,audio_file_path))
+            search_thread.start()
+            # Append inferred text to the output text file
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            output_text_file = "transcribe/Transcribed Audio.txt"
+            with open(output_text_file, 'a') as text_file:
+                text_file.write(f"{timestamp}: {result.text}\n")
+                
+            search_thread.join()
+            # Delete the audio file
+            os.remove(audio_file_path)
+            print(f"Transcription complete. Audio file deleted.")
+        except Exception as e:
+            print(f"Error: {e}")
+
+    # Function to monitor and transcribe audio clips
+    def monitor_and_transcribe(self):
+        start_time = time.time()
+
+        while not self.shutdown_signal:
+            elapsed_time = time.time() - start_time
+
+            if elapsed_time >= self.listener_duration:
+                print(f"Listener has been running for {self.listener_duration} seconds. Stopping.")
+                self.shutdown_signal = True
+                break
+
+            files = glob.glob(os.path.join(self.temp_folder, "*.wav"))
+
+            if len(files) >= self.num_files_threshold:
+                files.sort(key=os.path.getmtime)
+
+                oldest_file = files[0]
+                print(oldest_file)
+                self.transcribe_audio_file(oldest_file)
+
+                time.sleep(5)
+                
+    def remove_all_files_in_folder(self):
+        # Get the list of files in the folder
+        files = os.listdir(self.temp_folder)
+
+        # Iterate over the list and remove each file
+        for file in files:
+            file_path = os.path.join(self.temp_folder, file)
+            try:
+                if os.path.isfile(file_path):
+                    self.transcribe_audio_file(file_path)
+                    os.remove(file_path)
+                    print(f"File removed: {file_path}")
+            except Exception as e:
+                print(f"Error removing file {file_path}: {e}")
+        del self.model.encoder
+        del self.model.decoder
+        with torch.no_grad():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    def download_clip(self):
+        temp_file = os.path.join(self.temp_folder, "output_audio_%Y%m%d%H%M%S.wav")
+
+        ffmpeg_command = [
+            'ffmpeg',
+            '-i', self.stream_url,
+            '-f', 'wav',
+            '-ar', '16000',
+            '-ac', '1',
+            '-af', 'volume=10,highpass=f=1000,lowpass=f=8000',
+            '-acodec', 'pcm_s16le',  # Set audio codec to pcm_s16le
+            '-f', 'segment',  # Specify the segment format
+            '-segment_time', '00:01:00',
+            '-strftime', '1',
+            temp_file
+        ]
+        try:
+            process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # Wait for the process to finish or for a shutdown signal
+            while process.poll() is None and not self.shutdown_signal:
+                pass
+            print("Clip download process terminated.")
+            
+            # Optionally, you can capture and print the output
+            # stdout, stderr = process.communicate()
+            # print("STDOUT:", stdout.decode())
+            # print("STDERR:", stderr.decode())
+        except subprocess.CalledProcessError as e:
+            print(f"Error: {e}")
+        finally:
+            if process:
+                process.terminate()
+                process.wait()
+            if self.shutdown_signal:
+                # Perform any cleanup or finalization steps here
+                print("Graceful shutdown completed.")
+                self.remove_all_files_in_folder()
+                with torch.no_grad():
+                    torch.cuda.empty_cache()
+                gc.collect()
+            else:
+                print("Process completed without a shutdown signal.")
+
+    def listener_start(self):
+        start_msg = {
             "title":"RadioListener",
             "msg":"Radio Listener bot is starting to listen and transcribe",
-            }
-    webhook(start_msg)
+            "url":""
+        }
+        #
+        #self.webhook(start_msg)
+        #
     
-    # Start the download clip thread
-    download_thread = threading.Thread(target=download_clip, args=(stream_url, temp_folder,))
-    download_thread.start()
+        # Start the download clip thread
+        self.download_thread.start()
 
-    # Start the monitor and transcribe thread
-    monitor_thread = threading.Thread(target=monitor_and_transcribe, args=(temp_folder,))
-    monitor_thread.start()
+        # Start the monitor and transcribe thread
+        print("Starting folder monitor")
+        self.monitor_thread.start()
     
-    #for clean shutdown
-    download_thread.join()
-    monitor_thread.join()
-
-
-if __name__ == "__main__":
-    listener_start()
+        # for clean shutdown
+        self.download_thread.join()
+        self.monitor_thread.join()
+        
+        print ("Listener has shut down")
