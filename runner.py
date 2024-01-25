@@ -1,10 +1,12 @@
 from radio import RadioListener
 import schedule
 
+
 radio_listener = RadioListener(stream_url= "http://19473.live.streamtheworld.com:80/CHSUFM_ADP_SC",
-                               listener_duration=40 * 60,
-                               temp_folder="/tmp/temp_audio_clips")
-#radio_listener.listener_start()
+                               listener_duration=20 * 60,
+                               temp_folder="/tmp/temp_audio_clips",
+                               whisper_model="base",
+                               transcribe_folder = "transcribe")
 
 time_list = ["06:55", "08:55", "10:55", "12:55", "14:55", "16:55", "18:55"]
 for i in time_list:
@@ -14,6 +16,6 @@ for i in time_list:
     schedule.every().thursday.at(i).do(radio_listener.listener_start)
     schedule.every().friday.at(i).do(radio_listener.listener_start)
 print ("Listener started")
+
 while True:
     schedule.run_pending()
-

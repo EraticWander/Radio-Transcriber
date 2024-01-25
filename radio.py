@@ -16,25 +16,35 @@ import torch
 
 import gc
 
+# Get the current script's directory
+script_dir = os.path.dirname(os.path.realpath(__file__))
+
+# Construct the path to the submittal module
+submittal_path = os.path.join(script_dir, 'submittal.py')
+
+# Import the ContestEntryBot class from the submittal module
+from importlib.machinery import SourceFileLoader
+ContestEntryBot = SourceFileLoader('submittal', submittal_path).load_module().ContestEntryBot
 
 class RadioListener:
-    def __init__(self, temp_folder = "temp_audio_clips", listener_duration = (20 * 60), stream_url = ""):
+    def __init__(self, temp_folder = "temp_audio_clips", listener_duration = (20 * 60), stream_url = "",
+                 transcribe_folder = "transcribe", whisper_model = "base"):
         self.temp_folder = temp_folder
+        self.transcribe_folder = transcribe_folder
+        
         signal.signal(signal.SIGINT, self.signal_handler)
         os.makedirs(self.temp_folder, exist_ok=True)
-        os.makedirs("transcribe", exist_ok=True)
+        os.makedirs(transcribe_folder, exist_ok=True)
+        
         self.num_files_threshold = 3
         self.listener_duration = listener_duration
         self.shutdown_signal = False
         self.stream_url = stream_url
-        self.download_thread = threading.Thread(target=self.download_clip, args=(), daemon=True)
-        self.monitor_thread = threading.Thread(target=self.monitor_and_transcribe, args=(), daemon=True)
-
+        self.whisper_model = whisper_model
+        
     def signal_handler(self, signal, frame):
         print("Received signal to gracefully shut down.")
         self.shutdown_signal = True
-        del self.model.encoder
-        del self.model.decoder
         with torch.no_grad():
             torch.cuda.empty_cache()
         gc.collect()
@@ -86,13 +96,33 @@ class RadioListener:
                 print (e)
                 keyword = transcribed_string
             print (keyword)
-            found_msg = {
-                "title":"RadioListener Found Keyword",
-                "msg":keyword,
-                "url":"https://www.iheartradio.ca/virginradio/kelowna/contests/virgin-radio-s-100-000-destroy-your-debt-1.21030390"
-                }
-            self.webhook(found_msg, file_path=file)
+            keyword = keyword.split('"')[1]
+            share_url = self.contest_entry(keyword)
+            print (share_url)
+            
+            if share_url != "FAILED":
+                print ("sending discord message with share URL")
+                found_msg = {
+                        "title":"RadioListener Found Keyword",
+                        "msg":keyword,
+                        "url":share_url
+                        } 
+            else:
+                print ("sending discord message without share URL")
+                found_msg = {
+                        "title":"RadioListener Found Keyword",
+                        "msg":keyword,
+                        "url":"https://www.iheartradio.ca/virginradio/kelowna/contests/virgin-radio-s-100-000-destroy-your-debt-1.21030390"
+                        }
+                self.webhook(found_msg, file_path=file)
 
+    
+    def contest_entry(self, keyword):
+        bot = ContestEntryBot()
+        bot.enter_contest(keyword)
+        share_url = bot.get_share_url()
+        return share_url
+            
     def transcribe_audio_file(self, audio_file_path):
         print(f"Transcribing {audio_file_path}...")
         # Check if the file exists
@@ -101,28 +131,16 @@ class RadioListener:
             return
 
         try:
-            self.model = whisper.load_model("base")
-
-            # load audio and pad/trim it to fit 30 seconds
-            audio = whisper.load_audio(audio_file_path)
-            audio = whisper.pad_or_trim(audio)
-
-            # make log-Mel spectrogram and move to the same device as the model
-            mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
-
-            # decode the audio
-            options = whisper.DecodingOptions(language='en',
-                                            fp16=True,
-                                            without_timestamps=False)
-            result = whisper.decode(self.model, mel, options)
+            self.model = whisper.load_model(self.whisper_model)
+            result = self.model.transcribe(audio_file_path)
             
-            search_thread = threading.Thread(target=self.find_keyword, args=(result.text,audio_file_path))
+            search_thread = threading.Thread(target=self.find_keyword, args=(result['text'],audio_file_path))
             search_thread.start()
             # Append inferred text to the output text file
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            output_text_file = "transcribe/Transcribed Audio.txt"
+            output_text_file = f"{self.transcribe_folder}/Transcribed Audio.txt"
             with open(output_text_file, 'a') as text_file:
-                text_file.write(f"{timestamp}: {result.text}\n")
+                text_file.write(f"{timestamp}: {result['text']}\n")
                 
             search_thread.join()
             # Delete the audio file
@@ -137,6 +155,7 @@ class RadioListener:
 
         while not self.shutdown_signal:
             elapsed_time = time.time() - start_time
+            print (f"elapsed time: {elapsed_time}", end="\r")
 
             if elapsed_time >= self.listener_duration:
                 print(f"Listener has been running for {self.listener_duration} seconds. Stopping.")
@@ -168,8 +187,6 @@ class RadioListener:
                     print(f"File removed: {file_path}")
             except Exception as e:
                 print(f"Error removing file {file_path}: {e}")
-        del self.model.encoder
-        del self.model.decoder
         with torch.no_grad():
             torch.cuda.empty_cache()
         gc.collect()
@@ -181,9 +198,9 @@ class RadioListener:
             'ffmpeg',
             '-i', self.stream_url,
             '-f', 'wav',
-            '-ar', '16000',
+            #'-ar', '16000',
             '-ac', '1',
-            '-af', 'volume=10,highpass=f=1000,lowpass=f=8000',
+            #'-af', 'volume=10,highpass=f=1000,lowpass=f=8000',
             '-acodec', 'pcm_s16le',  # Set audio codec to pcm_s16le
             '-f', 'segment',  # Specify the segment format
             '-segment_time', '00:01:00',
@@ -192,11 +209,12 @@ class RadioListener:
         ]
         try:
             process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-            # Wait for the process to finish or for a shutdown signal
+            
             while process.poll() is None and not self.shutdown_signal:
                 pass
-            print("Clip download process terminated.")
+            print (f"shutdown signal {self.shutdown_signal}")
+            process.terminate()
+            print("Clip download process terminated forcefully.")
             
             # Optionally, you can capture and print the output
             # stdout, stderr = process.communicate()
@@ -206,11 +224,13 @@ class RadioListener:
             print(f"Error: {e}")
         finally:
             if process:
-                process.terminate()
-                process.wait()
+                process.kill()
+                print("Clip download process terminated.")
+                
             if self.shutdown_signal:
                 # Perform any cleanup or finalization steps here
                 print("Graceful shutdown completed.")
+                print ("transcoding and removing all remaining files")
                 self.remove_all_files_in_folder()
                 with torch.no_grad():
                     torch.cuda.empty_cache()
@@ -227,16 +247,22 @@ class RadioListener:
         #
         #self.webhook(start_msg)
         #
+        download_thread = threading.Thread(target=self.download_clip, args=(), daemon=True)
+        monitor_thread = threading.Thread(target=self.monitor_and_transcribe, args=(), daemon=True)
     
         # Start the download clip thread
-        self.download_thread.start()
+        print (f"Starting downloading {self.stream_url} radio stream")
+        download_thread.start()
 
         # Start the monitor and transcribe thread
         print("Starting folder monitor")
-        self.monitor_thread.start()
+        monitor_thread.start()
     
         # for clean shutdown
-        self.download_thread.join()
-        self.monitor_thread.join()
+        download_thread.join()
+        monitor_thread.join()
         
         print ("Listener has shut down")
+        print("Download thread is alive:", download_thread.is_alive())
+        print("Monitor thread is alive:", monitor_thread.is_alive())
+        self.shutdown_signal = False
