@@ -1,8 +1,6 @@
 import subprocess
 import threading
 import os
-import numpy as np
-
 
 from datetime import datetime
 
@@ -16,23 +14,51 @@ import torch
 
 import gc
 
-# Get the current script's directory
 script_dir = os.path.dirname(os.path.realpath(__file__))
-
-# Construct the path to the submittal module
+# add sumbittal.py to directory. this is so we can call ContestEneryBot
 submittal_path = os.path.join(script_dir, 'submittal.py')
 
-# Import the ContestEntryBot class from the submittal module
 from importlib.machinery import SourceFileLoader
+# import submittal.py using SourceFileLoader
 ContestEntryBot = SourceFileLoader('submittal', submittal_path).load_module().ContestEntryBot
 
 class RadioListener:
-    def __init__(self, temp_folder = "temp_audio_clips", listener_duration = (20 * 60), stream_url = "",
-                 transcribe_folder = "transcribe", whisper_model = "base"):
+    """
+    Class for handling radio stream monitoring, transcription, and keyword recognition.
+
+    Args:
+        temp_folder (str): Path to the folder where temporary audio clips are stored.
+        listener_duration (int): Duration (in seconds) for which the radio listener should run.
+        stream_url (str): URL of the radio stream.
+        transcribe_folder (str): Path to the folder where transcriptions are stored.
+        whisper_model (str): Name of the whisper model used for transcription.
+        contest_url (str): URL of the radio contest.
+        contest (str): Name of the radio contest.
+        monitor_word (list[str]): List of keywords to monitor for in transcriptions.
+    """
+    def __init__(self, temp_folder:str = "temp_audio_clips", listener_duration:int = (20 * 60), stream_url:str = "",
+                 transcribe_folder:str = "transcribe", whisper_model:str = "base", contest_url:str = "", contest:str = "",
+                 monitor_word:list[str] = ["keyword", "key word"]):
+        """
+        Initializes the RadioListener object.
+
+        Args:
+            temp_folder (str): Path to the folder where temporary audio clips are stored.
+            listener_duration (int): Duration (in seconds) for which the radio listener should run.
+            stream_url (str): URL of the radio stream.
+            transcribe_folder (str): Path to the folder where transcriptions are stored.
+            whisper_model (str): Name of the whisper model used for transcription.
+            contest_url (str): URL of the radio contest.
+            contest (str): Name of the radio contest.
+            monitor_word (list[str]): List of keywords to monitor for in transcriptions.
+        """
         self.temp_folder = temp_folder
         self.transcribe_folder = transcribe_folder
+        self.contest_url = contest_url
+        self.contest = contest
+        self.monitor_word = monitor_word
         
-        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGINT, self.__signal_handler)
         os.makedirs(self.temp_folder, exist_ok=True)
         os.makedirs(transcribe_folder, exist_ok=True)
         
@@ -42,7 +68,14 @@ class RadioListener:
         self.stream_url = stream_url
         self.whisper_model = whisper_model
         
-    def signal_handler(self, signal, frame):
+    def __signal_handler(self, signal, frame):
+        """
+        Signal handler function to gracefully shut down the radio listener.
+
+        Args:
+            signal: The signal received.
+            frame: The current stack frame.
+        """
         print("Received signal to gracefully shut down.")
         self.shutdown_signal = True
         with torch.no_grad():
@@ -51,6 +84,13 @@ class RadioListener:
         
 
     def webhook(self, msg, file_path=None):
+        """
+        Sends a message with an optional audio file to a Discord webhook.
+
+        Args:
+            msg (dict): Dictionary containing message details (title, msg, url).
+            file_path (str): Path to the audio file to be sent. Default is None.
+        """
         webhook_url = 'https://discord.com/api/webhooks/1197650847664980029/VlpzbKii8dBYb5slvOHP3Q1wJmvgGGu30YDiRZMchXW-sYHOtdTczchO02CNFCxsP1mZ'
         webhook = Webhook.from_url(webhook_url, adapter=RequestsWebhookAdapter())
     
@@ -63,7 +103,16 @@ class RadioListener:
         else:
             webhook.send(embed=embed)
 
-    def return_keyword(self, audio_trans):
+    def __return_keyword(self, audio_trans):
+        """
+        Sends the audio transcription to ChatGPT and returns the identified keyword.
+
+        Args:
+            audio_trans (str): Transcription of the audio.
+
+        Returns:
+            str: Identified keyword.
+        """
         from openai import OpenAI
         print ("sending to chatgpt to find keyword")
         client = OpenAI(
@@ -82,48 +131,79 @@ class RadioListener:
         return chat.choices[0].message.content
 
         
-    def find_keyword(self, transcribed_string, file):
-        import re
-        # Use regular expression to find the keyword
-        matches = re.search(r'\b' + re.escape("keyword") + r'\b', transcribed_string, flags=re.IGNORECASE)
+    def __find_keyword(self, transcribed_string, file):
+        """
+        Checks if any keyword from the monitor_word list is present in the transcription.
 
-        # Check if the keyword is found
-        if matches:
+        Args:
+            transcribed_string (str): Transcription of the audio.
+            file (str): Path to the audio file.
+
+        Side Effects:
+            Sends a Discord message with the identified keyword and contest details.
+        """
+        print ("finding keyword")
+        if any(phrase in transcribed_string.lower() for phrase in self.monitor_word):
             print ("Match found")
             try:
-                keyword = self.return_keyword(transcribed_string)
+                keyword = self.__return_keyword(transcribed_string)
+                keyword = keyword.split('"')[1]
             except Exception as e:
                 print (e)
                 keyword = transcribed_string
             print (keyword)
-            keyword = keyword.split('"')[1]
-            share_url = self.contest_entry(keyword)
-            print (share_url)
             
-            if share_url != "FAILED":
-                print ("sending discord message with share URL")
-                found_msg = {
-                        "title":"RadioListener Found Keyword",
-                        "msg":keyword,
-                        "url":share_url
-                        } 
-            else:
-                print ("sending discord message without share URL")
-                found_msg = {
-                        "title":"RadioListener Found Keyword",
-                        "msg":keyword,
-                        "url":"https://www.iheartradio.ca/virginradio/kelowna/contests/virgin-radio-s-100-000-destroy-your-debt-1.21030390"
-                        }
-                self.webhook(found_msg, file_path=file)
+            # check if keyword returned is just "keyword"
+            if "keyword" not in keyword or "key word" not in keyword:
+                share_url = self.__contest_entry(keyword)
+                print (share_url)
+                
+                if share_url != "FAILED":
+                    print ("sending discord message with share URL")
+                    found_msg = {
+                            "title":f"Found Keyword for {self.contest}",
+                            "msg":keyword,
+                            "url":share_url
+                            } 
+                    self.webhook(found_msg, file_path=file)
+                    self.shutdown_signal = True
+                    
+                else:
+                    print ("sending discord message without share URL")
+                    found_msg = {
+                            "title":f"Found Keyword for {self.contest}",
+                            "msg":keyword,
+                            "url":self.contest_url
+                            }
+                    self.webhook(found_msg, file_path=file)
+                
+    def __contest_entry(self, keyword):
+        """
+        Enters the radio contest with the provided keyword and returns the share URL.
 
-    
-    def contest_entry(self, keyword):
-        bot = ContestEntryBot()
+        Args:
+            keyword (str): Keyword to enter the contest.
+
+        Returns:
+            str: Share URL of the entered contest.
+        """
+        bot = ContestEntryBot(contest_url = self.contest_url)
         bot.enter_contest(keyword)
         share_url = bot.get_share_url()
         return share_url
             
-    def transcribe_audio_file(self, audio_file_path):
+    def __transcribe_audio_file(self, audio_file_path):
+        """
+        Transcribes the audio file using the Whisper ASR model.
+
+        Args:
+            audio_file_path (str): Path to the audio file.
+
+        Side Effects:
+            Sends Discord messages with identified keywords and contest details.
+            Appends transcriptions to the output text file.
+            Deletes the transcribed audio file.
+        """
         print(f"Transcribing {audio_file_path}...")
         # Check if the file exists
         if not os.path.exists(audio_file_path):
@@ -131,10 +211,10 @@ class RadioListener:
             return
 
         try:
-            self.model = whisper.load_model(self.whisper_model)
-            result = self.model.transcribe(audio_file_path)
+            model = whisper.load_model(self.whisper_model)
+            result = model.transcribe(audio_file_path, language="en",)
             
-            search_thread = threading.Thread(target=self.find_keyword, args=(result['text'],audio_file_path))
+            search_thread = threading.Thread(target=self.__find_keyword, args=(result['text'],audio_file_path))
             search_thread.start()
             # Append inferred text to the output text file
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -150,7 +230,15 @@ class RadioListener:
             print(f"Error: {e}")
 
     # Function to monitor and transcribe audio clips
-    def monitor_and_transcribe(self):
+    def __monitor_and_transcribe(self):
+        """
+        Monitors the temporary folder for audio clips and transcribes them.
+        Runs until the specified listener duration is reached or a shutdown signal is received.
+
+        Side Effects:
+            Calls __transcribe_audio_file for each audio clip.
+            Removes all files in the temporary folder at the end.
+        """
         start_time = time.time()
 
         while not self.shutdown_signal:
@@ -169,11 +257,18 @@ class RadioListener:
 
                 oldest_file = files[0]
                 print(oldest_file)
-                self.transcribe_audio_file(oldest_file)
+                self.__transcribe_audio_file(oldest_file)
 
                 time.sleep(5)
                 
     def remove_all_files_in_folder(self):
+        """
+        Removes all files in the temporary folder.
+
+        Side Effects:
+            Calls __transcribe_audio_file for each file.
+            Clears GPU memory and performs garbage collection.
+        """
         # Get the list of files in the folder
         files = os.listdir(self.temp_folder)
 
@@ -182,7 +277,7 @@ class RadioListener:
             file_path = os.path.join(self.temp_folder, file)
             try:
                 if os.path.isfile(file_path):
-                    self.transcribe_audio_file(file_path)
+                    self.__transcribe_audio_file(file_path)
                     os.remove(file_path)
                     print(f"File removed: {file_path}")
             except Exception as e:
@@ -191,7 +286,14 @@ class RadioListener:
             torch.cuda.empty_cache()
         gc.collect()
 
-    def download_clip(self):
+    def __download_clip(self):
+        """
+        Downloads the radio stream and saves it as segmented audio clips.
+
+        Side Effects:
+            Calls __transcribe_audio_file for each downloaded clip.
+            Cleans up resources upon shutdown signal.
+        """
         temp_file = os.path.join(self.temp_folder, "output_audio_%Y%m%d%H%M%S.wav")
 
         ffmpeg_command = [
@@ -239,18 +341,25 @@ class RadioListener:
                 print("Process completed without a shutdown signal.")
 
     def listener_start(self):
+        """
+        Starts the radio listener by initiating the __download_clip and __monitor_and_transcribe threads.
+
+        Side Effects:
+            Sends Discord messages for the start and stop of the radio listener.
+        """
         start_msg = {
-            "title":"RadioListener",
-            "msg":"Radio Listener bot is starting to listen and transcribe",
+            "title":f"{self.contest} listener has started (DEBUGGING)",
+            "msg":f"Radio Listener bot is starting to listen and transcribe for {self.contest}",
             "url":""
         }
         #
-        #self.webhook(start_msg)
-        #
-        download_thread = threading.Thread(target=self.download_clip, args=(), daemon=True)
-        monitor_thread = threading.Thread(target=self.monitor_and_transcribe, args=(), daemon=True)
+        # self.webhook(start_msg)
+        # 
+        download_thread = threading.Thread(target=self.__download_clip, args=(), daemon=True)
+        monitor_thread = threading.Thread(target=self.__monitor_and_transcribe, args=(), daemon=True)
     
         # Start the download clip thread
+        print (f"Starting task {self.contest}")
         print (f"Starting downloading {self.stream_url} radio stream")
         download_thread.start()
 
@@ -265,4 +374,12 @@ class RadioListener:
         print ("Listener has shut down")
         print("Download thread is alive:", download_thread.is_alive())
         print("Monitor thread is alive:", monitor_thread.is_alive())
+        end_msg = {
+            "title":f"{self.contest} listener has stopped (DEBUGGING)",
+            "msg":f"Radio Listener bot has stopped",
+            "url":""
+        }
+        #
+        # self.webhook(end_msg)
+        # 
         self.shutdown_signal = False

@@ -1,8 +1,9 @@
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-
 class ContestEntryBot:
-    def __init__(self):
+    def __init__(self, contest_url:str):
+        
+        self.contest_url = contest_url
         self.share_url = None
 
     def get_share_url(self):
@@ -13,10 +14,10 @@ class ContestEntryBot:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
+            context.clear_cookies()
 
             try:
-                page.goto("https://campaign.aptivada.com/contest/1606924?embed=true&parent=https%253A%252F%252Fwww.iheartradio.ca%252Fvirginradio%252Fkelowna%252Fcontests%252Fvirgin-radio-s-100-000-destroy-your-debt-1.21030390")
-
+                page.goto(self.contest_url)
                 page.wait_for_load_state("load")
 
                 # Enter Email
@@ -58,9 +59,9 @@ class ContestEntryBot:
                     if not city_success:
                         page.fill('input[name="user_city"]', "West Kelowna")
                     if not zip_success:
-                        page.fill('input[name="user_zip"]', "V1Z 4C5")
+                        page.fill('input[name="user_zip"]', "V1Z4C5")
                     if not phone_success:
-                        page.fill('input[name="user_phone"]', "250-859-1433")
+                        page.fill('input[name="user_phone"]', "2508591433")
                         
                     page.check('[name="terms_checkbox"]')
                     print ("entered all text boxes")
@@ -83,6 +84,7 @@ class ContestEntryBot:
                     # Click Submit Button
                     submit_button_selector = ".formBtn.goToStepBtn.goToStep3Btn.themeBackgroundHoverable"
                     page.click(submit_button_selector)
+                    page.wait_for_timeout(1000)
                     
 
                 # Check if the error class is present
@@ -95,11 +97,12 @@ class ContestEntryBot:
                 print ("Time out Error)")
                 page.screenshot(path=f"screenshots/{keyword}-TIMEOUT.png", full_page=True)
                 self.share_url = "FAILED"
-
             except Exception as e:
                 print (e)
                 page.screenshot(path=f"screenshots/{keyword}-{e}.png", full_page=True)
                 self.share_url = "FAILED"
-
             finally:
+                page.evaluate("localStorage.clear()")
+                page.evaluate("sessionStorage.clear()")
                 context.close()
+                browser.close()
