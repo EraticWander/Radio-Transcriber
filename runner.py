@@ -21,14 +21,17 @@ def define_task(stream_url, listener_duration, temp_folder, whisper_model, trans
     Returns:
         None
     """
-    radio = RadioListener(stream_url = stream_url,
-                               listener_duration = listener_duration,
-                               temp_folder = temp_folder,
-                               whisper_model = whisper_model,
-                               transcribe_folder = transcribe_folder,
-                               contest = contest,
-                               contest_url = contest_url,
-                               monitor_word = monitor_word)
+    try:
+        radio = RadioListener(stream_url = stream_url,
+                                listener_duration = listener_duration,
+                                temp_folder = temp_folder,
+                                whisper_model = whisper_model,
+                                transcribe_folder = transcribe_folder,
+                                contest = contest,
+                                contest_url = contest_url,
+                                monitor_word = monitor_word)
+    except ValueError as e:
+        return False
     radio_task = multiprocessing.Process(target=radio.listener_start)
     for i in time_list:
         schedule.every().monday.at(i).do(radio_task.start)
@@ -42,7 +45,7 @@ def define_task(stream_url, listener_duration, temp_folder, whisper_model, trans
             
 # Destroy your debt
 print ("5k-A-Day listener")
-pay_your_way = define_task(stream_url= "http://19473.live.streamtheworld.com:80/CHSUFM_ADP_SC",
+pay_your_way = define_task(stream_url= "http://18323.live.streamtheworld.com:3690/CHSUFM_SC",
                            listener_duration=20 * 60,
                             temp_folder="/tmp/temp_audio_clips/dd",
                             whisper_model="base",

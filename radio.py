@@ -4,7 +4,8 @@ import os
 
 from datetime import datetime
 
-from discord import Webhook, RequestsWebhookAdapter, Embed, Color, File
+import requests
+from discord import Webhook, SyncWebhook, Embed, Color, File
 
 import signal
 import time
@@ -68,6 +69,17 @@ class RadioListener:
         self.stream_url = stream_url
         self.whisper_model = whisper_model
         
+        if not self.__stream_alive():
+            stream_fail_msg = {
+            "title":f"{self.contest} failed to start",
+            "msg":f"Stream URL is no longer valid",
+            "url":""
+                }
+                
+            self.webhook(stream_fail_msg)
+            raise ValueError(f"Stream is not reachable: {self.stream_url}")
+            
+        
     def __signal_handler(self, signal, frame):
         """
         Signal handler function to gracefully shut down the radio listener.
@@ -91,8 +103,7 @@ class RadioListener:
             msg (dict): Dictionary containing message details (title, msg, url).
             file_path (str): Path to the audio file to be sent. Default is None.
         """
-        webhook_url = 'https://discord.com/api/webhooks/1197650847664980029/VlpzbKii8dBYb5slvOHP3Q1wJmvgGGu30YDiRZMchXW-sYHOtdTczchO02CNFCxsP1mZ'
-        webhook = Webhook.from_url(webhook_url, adapter=RequestsWebhookAdapter())
+        webhook = SyncWebhook.from_url('https://discord.com/api/webhooks/1197650847664980029/VlpzbKii8dBYb5slvOHP3Q1wJmvgGGu30YDiRZMchXW-sYHOtdTczchO02CNFCxsP1mZ')
     
         embed = Embed(title=msg['title'], description=msg['msg'], url=msg['url'], color=Color.blue())
     
@@ -102,7 +113,17 @@ class RadioListener:
             webhook.send(embed=embed, file=audio_file)
         else:
             webhook.send(embed=embed)
-
+            
+    def __stream_alive(self):
+        try:
+            response = requests.get(self.stream_url, stream=True, timeout=5)
+            if response.status_code != 200:
+                return False
+            response.iter_content(chunk_size=1024)
+            return True
+        except requests.exceptions.RequestException:
+            return False
+        
     def __return_keyword(self, audio_trans):
         """
         Sends the audio transcription to ChatGPT and returns the identified keyword.
@@ -285,6 +306,16 @@ class RadioListener:
         with torch.no_grad():
             torch.cuda.empty_cache()
         gc.collect()
+    
+    def __stream_alive(self):
+        try:
+            response = requests.get(self.stream_url, stream=True, timeout=5)
+            if response.status_code != 200:
+                return False
+            response.iter_content(chunk_size=1024)
+            return True
+        except requests.exceptions.RequestException:
+            return False
 
     def __download_clip(self):
         """
@@ -310,7 +341,8 @@ class RadioListener:
             temp_file
         ]
         try:
-            process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            #process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(ffmpeg_command)
             
             while process.poll() is None and not self.shutdown_signal:
                 pass
@@ -352,9 +384,9 @@ class RadioListener:
             "msg":f"Radio Listener bot is starting to listen and transcribe for {self.contest}",
             "url":""
         }
-        #
-        # self.webhook(start_msg)
-        # 
+        
+        self.webhook(start_msg)
+        
         download_thread = threading.Thread(target=self.__download_clip, args=(), daemon=True)
         monitor_thread = threading.Thread(target=self.__monitor_and_transcribe, args=(), daemon=True)
     
@@ -383,3 +415,17 @@ class RadioListener:
         # self.webhook(end_msg)
         # 
         self.shutdown_signal = False
+
+if __name__ == "__main__":
+        radio = RadioListener(stream_url= "http://18323.live.streamtheworld.com:3690/CHSUFM_SC",
+                              listener_duration=20 * 60,
+                              temp_folder="/tmp/temp_audio_clips/dd",
+                              whisper_model="base",
+                              transcribe_folder = "transcribe_dd",
+                              contest = "5K A Day",
+                              contest_url = "https://campaign.aptivada.com/contest/1698972?js=true&parent=https%3A%2F%2Fwww.virginradio.ca%2Fkelowna%2Fcontests%2Fvirgin-radios-5k-a-day-kelowna.html&apt_widget_type=preview&apt_widget_action=default",
+                              monitor_word = ["keyword", "key word"]
+        )
+        
+        radio.listener_start()
+        

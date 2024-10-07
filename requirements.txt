@@ -1,5 +1,6 @@
 numpy
-discord.py==1.7.3
+requests
+discord
 git+https://github.com/openai/whisper.git
 torch --index-url https://download.pytorch.org/whl/cu118
 torchvision --index-url https://download.pytorch.org/whl/cu118
