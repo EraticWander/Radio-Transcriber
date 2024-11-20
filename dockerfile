@@ -1,6 +1,6 @@
 # Docker build command
 # docker buildx build -t eraticwanderer/radio_listener:0.0.01 --load .
-FROM python:3.9.18
+FROM python:3.14.0a1
 
 # Install Python dependencies and other dependencies
 RUN apt-get update && \
