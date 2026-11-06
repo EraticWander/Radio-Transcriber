@@ -56,3 +56,6 @@ Thumbs.db
 
 # Temporary Audio Clips
 temp_audio_clips/
+
+# Local Git & Docker Reference Guide
+git instructions.md
