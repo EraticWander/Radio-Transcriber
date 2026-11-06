@@ -52,3 +52,18 @@ python runner.py
 docker build -f dockerfile -t radio-transcriber .
 docker run -d --gpus all --name radio-transcriber radio-transcriber
 ```
+
+---
+
+## Credits, Acknowledgments & External Sources
+
+- **[OpenAI Whisper](https://github.com/openai/whisper)** *(MIT License)*  
+  Open-source neural speech recognition model by **OpenAI**, used in `radio.py` for local automated transcription of recorded radio broadcast segments.
+- **[PyTorch (`torch`, `torchaudio`, `torchvision`)](https://github.com/pytorch/pytorch)** *(BSD-3-Clause License)*  
+  Deep learning framework by the **PyTorch Foundation / Meta AI** providing CUDA GPU acceleration for Whisper inference.
+- **[Microsoft Playwright for Python](https://github.com/microsoft/playwright-python)** *(Apache-2.0 License)*  
+  Used by `ContestEntryBot` in `submittal.py` to automate headless browser contest form submissions and capture confirmation screenshots.
+- **[`discord.py`](https://github.com/Rapptz/discord.py)** *(MIT License)*  
+  Created by **Danny (`Rapptz`)**, used for sending real-time keyword detection embeds and audio clip attachments to Discord webhooks.
+- **[FFmpeg](https://github.com/FFmpeg/FFmpeg)** *(LGPL / GPL)*  
+  Used via `subprocess` to capture and segment live `streamtheworld.com` AAC/MP3 audio streams.
