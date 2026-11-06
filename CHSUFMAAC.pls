@@ -1,0 +1,10 @@
+[playlist]
+File1=http://18423.live.streamtheworld.com:80/CHSUFMAAC_SC
+File2=http://18423.live.streamtheworld.com:3690/CHSUFMAAC_SC
+File3=http://14623.live.streamtheworld.com:80/CHSUFMAAC_SC
+File4=http://14623.live.streamtheworld.com:3690/CHSUFMAAC_SC
+Title1=CHSUFMAAC_SC
+Title2=CHSUFMAAC_SC-Bak
+Length1=-1
+NumberOfEntries=4
+Version=2
